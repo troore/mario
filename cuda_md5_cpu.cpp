@@ -264,29 +264,33 @@ void md5_cpu_v2(const uint *in, uint &a, uint &b, uint &c, uint &d)
 
 }
 
-double cpu_execute_kernel (uint *cpuWords, uint *cpuHashes, uint hashSize)
+/*void md5_pad(char *paddedWord, char *cpuWord, uint len)
+{
+	uint i = 0;
+
+	for (; i < len; i++)
+		paddedWord[i] = cpuWord[i];
+	paddedWord[i] = 0x80;
+
+	i++;
+	for (; i < 64; i++)
+		paddedWord[i] = 0x0u;
+	((uint *)paddedWord)[14] = len * 8;
+}*/
+
+double cpu_execute_kernel (char *cpuWords, uint *cpuHashes, uint hashSize, uint maxWordLen)
 {
 	cudaEvent_t start, stop;
 	cudaEventCreate (&start), cudaEventCreate (&stop);
 	cudaEventRecord (start, 0);
 
-	for (unsigned long long i = 0; i < (unsigned long long)hashSize; i++)
+	uint *iPaddedWord = new uint[16];
+	for (uint i = 0; i < hashSize; i++)
 	{
-		MD5_CPU(&cpuWords[16 * i], cpuHashes[4 * i], cpuHashes[4 * i + 1], cpuHashes[4 * i + 2], cpuHashes[4 * i + 3]);
+		md5_pad ((char *)iPaddedWord, &cpuWords[maxWordLen * i], maxWordLen);
+		MD5_CPU(iPaddedWord, cpuHashes[4 * i], cpuHashes[4 * i + 1], cpuHashes[4 * i + 2], cpuHashes[4 * i + 3]);
 	}
-
-/*#define CHUNK_NUM 100
-	uint chunkSize = (hashSize + CHUNK_NUM - 1) / CHUNK_NUM;
-
-	for (uint k = 0; k < CHUNK_NUM; k++)
-	{
-		for(uint i = 0; i < chunkSize; i++)
-		{
-			MD5_CPU(&cpuWords[16 * i], cpuHashes[4 * i], cpuHashes[4 * i + 1], cpuHashes[4 * i + 2], cpuHashes[4 * i + 3]);
-		}
-		cpuWords += 16 * chunkSize;
-		cpuHashes += 4 * chunkSize;
-	} */
+	delete[] iPaddedWord;
 
 	cudaEventRecord (stop, 0);
 	cudaEventSynchronize (stop);

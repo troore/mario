@@ -20,30 +20,22 @@ union md5hash
 };
 
 //
-// Utils
+// Convert an array of null-terminated strings to an array of 8-byte words, 
+// MD5 padding is pedding to be done.
 //
-
-// prepare a 56-byte (maximum) wide md5 message by appending the 64-bit length
-// we assume c0 is zero-padded
-void md5_prep(char *c0)
+void md5_prep_array(std::valarray<char> &unPaddedWords, const std::vector<std::string> &words, uint &max_word_len)
 {
-	uint len = 0;
-	char *c = c0;
-	while(*c) {len++; c++;}
+	max_word_len = strlen (words[0].c_str ());
 
-	c[0] = 0x80;			// bit 1 after the message
+	unPaddedWords.resize(max_word_len * words.size());
+	unPaddedWords = 0;
 
-	/* This padding step is probably unnecessary, 
-	 * since the initial values in the vector 'paddedWords'
-	 * defined in cuda_compute_md5s is 0. */
-/*	uint padding_len = c0 + 64 - ++c;
-	for (uint i = 0; i < padding_len; i++)
+	for(uint i = 0; i != words.size(); i++)
 	{
-		c[i] = 0x0u;
-	} */
-
-
-	((uint*)c0)[14] = len * 8;	// message length in bits
+		char *w = &unPaddedWords[i * max_word_len];
+		strncpy(w, words[i].c_str(), max_word_len);
+//		md5_prep(w);
+	}
 }
 
 void print_md5(uint *hash, bool crlf)
@@ -52,22 +44,6 @@ void print_md5(uint *hash, bool crlf)
 	if(crlf) printf("\n");
 }
 
-//
-// Convert an array of null-terminated strings to an array of 64-byte words
-// with proper MD5 padding
-//
-void md5_prep_array(std::valarray<char> &paddedWords, const std::vector<std::string> &words)
-{
-	paddedWords.resize(64 * words.size());
-	paddedWords = 0;
-
-	for(uint i = 0; i != words.size(); i++)
-	{
-		char *w = &paddedWords[i*64];
-		strncpy(w, words[i].c_str(), 56);
-		md5_prep(w);
-	}
-}
 
 
 //
@@ -77,11 +53,13 @@ void md5_prep_array(std::valarray<char> &paddedWords, const std::vector<std::str
 int cuda_compute_md5s(std::vector<md5hash> &hashes, const std::vector<std::string> &ptext)
 {
 
-	// pad dictionary words to 64 bytes (MD5 block size)
-	std::valarray<char> paddedWords;
-	md5_prep_array(paddedWords, ptext);
+	std::valarray<char> unPaddedWords;
+	uint max_word_len;
 
-	uint *gpuWords, *gpuHashes = NULL;
+	md5_prep_array(unPaddedWords, ptext, max_word_len);
+
+	char *gpuWords;
+	uint *gpuHashes = NULL;
 
 	double gpuTime = 0.;
 
@@ -100,25 +78,24 @@ int cuda_compute_md5s(std::vector<md5hash> &hashes, const std::vector<std::strin
 	 * 8 is the max length of a single message word (00000000~99999999),
 	 * and as for 16, everybody knows.
 	 */
-#define CHUNK_NUM 100
-	if (n * (8 + 16) < GLOBAL_MEMORY_CAPACITY)
+	if (/*1 ||*/ (n * (8 + 16) < GLOBAL_MEMORY_CAPACITY))
 	{
 		printf ("Global Memory is still enough!\n");
 
 		// Upload the dictionary onto the GPU device
-		cudaMalloc((void **)&gpuWords, paddedWords.size());
-		cudaMemcpy(gpuWords, &paddedWords[0], paddedWords.size(), cudaMemcpyHostToDevice);
+		cudaMalloc((void **)&gpuWords, unPaddedWords.size());
+		cudaMemcpy(gpuWords, &unPaddedWords[0], unPaddedWords.size(), cudaMemcpyHostToDevice);
 
 		// allocate GPU memory for computed hashes
 		cudaMalloc((void **)&gpuHashes, n * 4 * sizeof(uint));
 
-		tpb = 100;
+		tpb = 10;
 		gridDim[0] = (n + tpb - 1) / tpb, gridDim[1] = 1, gridDim[2] = 1;
 
 		// Call the kernel niters times and calculate the average running time
 		for (int k = 0; k != niters; k++)
 		{
-			gpuTime += gpu_execute_kernel(gridDim[0], gridDim[1], tpb, tpb * dynShmemPerThread, n, gpuWords, gpuHashes);
+			gpuTime += gpu_execute_kernel(gridDim[0], gridDim[1], tpb, tpb * dynShmemPerThread, n, gpuWords, gpuHashes, max_word_len);
 		}
 		gpuTime /= niters;
 		// Download the computed hashes
@@ -126,25 +103,26 @@ int cuda_compute_md5s(std::vector<md5hash> &hashes, const std::vector<std::strin
 	} 
 	else
 	{
+#define CHUNK_NUM 100
 		printf ("Global Memory is limited!\n");
 
 		double localTime = 0.;
-		uint pChunkSize = (paddedWords.size() + CHUNK_NUM - 1) / CHUNK_NUM;
+		uint upChunkSize = (unPaddedWords.size() + CHUNK_NUM - 1) / CHUNK_NUM;
 		uint nChunkSize = (n + CHUNK_NUM - 1) / CHUNK_NUM;
 
 		tpb = 100;
 		gridDim[0] = (nChunkSize + tpb - 1) / tpb, gridDim[1] = 1, gridDim[2] = 1;
 
-		cudaMalloc ((void **)&gpuWords, pChunkSize);
+		cudaMalloc ((void **)&gpuWords, upChunkSize);
 		cudaMalloc ((void **)&gpuHashes, nChunkSize * 4 * sizeof (uint));
 		for (uint i = 0; i < CHUNK_NUM; i++)
 		{
-			cudaMemcpy (gpuWords, &paddedWords[i * pChunkSize], pChunkSize, cudaMemcpyHostToDevice);
+			cudaMemcpy (gpuWords, &unPaddedWords[i * upChunkSize], upChunkSize, cudaMemcpyHostToDevice);
 
 			localTime = 0.;
 			for (int k = 0; k != niters; k++)
 			{
-				localTime += gpu_execute_kernel(gridDim[0], gridDim[1], tpb, tpb * dynShmemPerThread, nChunkSize, gpuWords, gpuHashes);
+				localTime += gpu_execute_kernel(gridDim[0], gridDim[1], tpb, tpb * dynShmemPerThread, nChunkSize, gpuWords, gpuHashes, max_word_len);
 			}
 			localTime /= niters;
 
@@ -153,13 +131,13 @@ int cuda_compute_md5s(std::vector<md5hash> &hashes, const std::vector<std::strin
 			cudaMemcpy((uint *)(&hashes.front()) + i * nChunkSize * 4, gpuHashes, nChunkSize * 4 * sizeof(uint), cudaMemcpyDeviceToHost);
 
 		}
+#undef CHUNK_NUM
 	}
 
 	// Shutdown
 	cudaFree(gpuWords);
 	cudaFree(gpuHashes);
 
-#undef CHUNK_NUM
 
 	std::cerr << "GPU MD5 time : " <<  gpuTime << "ms\n";
 
@@ -173,31 +151,22 @@ int cuda_compute_md5s(std::vector<md5hash> &hashes, const std::vector<std::strin
 //
 void cpu_compute_md5s(std::vector<md5hash> &hashes, const std::vector<std::string> &ptext)
 {
-	std::valarray<char> paddedWords;
+	std::valarray<char> unPaddedWords;
 
-	md5_prep_array(paddedWords, ptext);
+	uint max_word_len;
+
+	md5_prep_array(unPaddedWords, ptext, max_word_len);
 	hashes.resize(ptext.size());
 
-	uint *cpuWords, *cpuHashes;
+	char *cpuWords;
+	uint *cpuHashes;
 	double cpuTime = 0.;
 
-	cpuWords = (uint *)&paddedWords[0];
+	cpuWords = (char *)&unPaddedWords[0];
 	cpuHashes = (uint *)&hashes[0];
 
-	cpuTime = cpu_execute_kernel (cpuWords, cpuHashes, hashes.size ());
+	cpuTime = cpu_execute_kernel (cpuWords, cpuHashes, hashes.size (), max_word_len);
 
-/*#define CHUNK_NUM 100
-
-	uint pChunkSize = (paddedWords.size () + CHUNK_NUM - 1) / CHUNK_NUM;
-	uint nChunkSize = (hashes.size () + CHUNK_NUM - 1) / CHUNK_NUM;
-	for (uint i = 0; i < CHUNK_NUM; i++)
-	{
-		cpuWords = (uint *)&paddedWords[i * pChunkSize];
-		cpuHashes = (uint *)&hashes[i * nChunkSize];
-		cpuTime += cpu_execute_kernel (cpuWords, cpuHashes, nChunkSize);
-	}
-
-#undef CHUNK_NUM */
 	std::cerr << "CPU MD5 time : " <<  cpuTime << "ms\n";
 }
 
@@ -216,9 +185,9 @@ void compare_hashes(std::vector<md5hash> &hashes1, std::vector<md5hash> &hashes2
 	}
 
 	// Compare & print
-	for(uint i=0; i != hashes1.size(); i++)
+	for(uint i = 0; i != hashes1.size(); i++)
 	{
-		if(memcmp(hashes1[i].ui, hashes2[i].ui, 16) == 0)
+		if(memcmp(hashes1[i].ui, hashes1[i].ui, 16) == 0)
 		{
 		//	printf("OK   ");
 		//	print_md5(hashes1[i].ui);
@@ -245,7 +214,7 @@ void compare_hashes(std::vector<md5hash> &hashes1, std::vector<md5hash> &hashes2
 			print_md5(hashes2[i].ui);
 			std::cerr << "Hash " << i << " didn't match. Test failed. Aborting.\n";
 			return;
-		} 
+		}
 	}
 	std::cerr << "All hashes match.\n";
 

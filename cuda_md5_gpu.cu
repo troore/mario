@@ -65,16 +65,6 @@ __device__ inline uint r(const uint i)
 	return rconst[(i / 16) * 4 + i % 4];
 }
 
-// Accessor for w[16] array. Naively, this would just be w[i]; however, this
-// choice leads to worst-case-scenario access pattern wrt. shared memory
-// bank conflicts, as the same indices in different threads fall into the
-// same bank (as the words are 16 uints long). The packing below causes the
-// same indices in different threads of a warp to map to different banks. In
-// testing this gave a ~40% speedup.
-//
-// PS: An alternative solution would be to make the w array 17 uints long
-// (thus wasting a little shared memory)
-//
 __device__ inline uint &getw(uint *w, const int i)
 {
 	return w[(i+threadIdx.x) % 16];
@@ -82,7 +72,8 @@ __device__ inline uint &getw(uint *w, const int i)
 
 __device__ inline uint getw(const uint *w, const int i)	// const- version
 {
-	return w[(i+threadIdx.x) % 16];
+//	return w[(i+threadIdx.x) % 16];
+	return w[i];
 }
 
 
@@ -300,35 +291,48 @@ void inline __device__ md5_v2(const uint *in, uint &a, uint &b, uint &c, uint &d
 //////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////
 
-// The kernel (this is the entrypoint of GPU code)
-// Loads the 64-byte word to be hashed from global to shared memory
-// and calls the calculation routine
-__global__ void md5_calc(uint *gwords, uint *hash, int realthreads)
+
+__host__ __device__ void md5_pad(char *paddedWord, char *gpuWord, uint len)
 {
-	int idx = blockIdx.y * gridDim.x * blockDim.x + blockIdx.x * blockDim.x + threadIdx.x; // assuming blockDim.y = 1 and threadIdx.y = 0, always
-	if (idx >= realthreads) { return; } // this check slows down the code by ~0.4% (measured)
+	uint i = 0;
+
+	for (; i < len; i++)
+		paddedWord[i] = gpuWord[i];
+	paddedWord[i] = 0x80;
+
+	i++;
+	for (; i < 64; i++)
+		paddedWord[i] = 0x0u;
+	((uint *)paddedWord)[14] = len * 8; // bit length
+}
+
+
+// The kernel (this is the entrypoint of GPU code)
+// Loads the 8-byte word to be hashed from global to shared memory
+// and calls the calculation routine
+__global__ void md5_calc(char *gpuWords, uint *gpuHashes, int realthreads, uint maxWordLen)
+{
+	uint idx = blockIdx.y * gridDim.x * blockDim.x + blockIdx.x * blockDim.x + threadIdx.x; // assuming blockDim.y = 1 and threadIdx.y = 0, always
+	if (idx >= realthreads) { return; }
 
 	// load the dictionary word for this thread
-	uint *word = &memory[0] + threadIdx.x * 16;
-	for(int i = 0; i != 16; i++)
-	{
-		getw(word, i) = gwords[(idx) * 16 + i];
-	}
+	uint *iPaddedWord = &memory[0] + threadIdx.x * 16;
+	md5_pad ((char *)iPaddedWord, &gpuWords[maxWordLen * idx], maxWordLen);
 
 	// compute MD5 hash
 	uint a, b, c, d;
 
-	RSA_KERNEL(word, a, b, c, d);
+	RSA_KERNEL(iPaddedWord, a, b, c, d);
 
 	// return the hash
-	hash[4 * idx + 0] = a;
-	hash[4 * idx + 1] = b;
-	hash[4 * idx + 2] = c;
-	hash[4 * idx + 3] = d;
+	gpuHashes[4 * idx + 0] = a;
+	gpuHashes[4 * idx + 1] = b;
+	gpuHashes[4 * idx + 2] = c;
+	gpuHashes[4 * idx + 3] = d;
 }
 
 // A helper to export the kernel call to C++ code not compiled with nvcc
-double gpu_execute_kernel(int blocks_x, int blocks_y, int threads_per_block, int shared_mem_required, int realthreads, uint *gpuWords, uint *gpuHashes)
+double gpu_execute_kernel(int blocks_x, int blocks_y, int threads_per_block, int shared_mem_required, int realthreads, char *gpuWords, uint *gpuHashes, uint max_word_len)
 {
 	dim3 grid;
 	grid.x = blocks_x; grid.y = blocks_y, grid.z = 1;
@@ -337,7 +341,7 @@ double gpu_execute_kernel(int blocks_x, int blocks_y, int threads_per_block, int
 	cudaEventCreate (&start), cudaEventCreate (&stop);
 	cudaEventRecord (start, 0);
 
-	md5_calc<<<grid, threads_per_block, shared_mem_required>>>(gpuWords, gpuHashes, realthreads);
+	md5_calc<<<grid, threads_per_block, shared_mem_required>>>(gpuWords, gpuHashes, realthreads, max_word_len);
 
 	cudaEventRecord (stop, 0);
 	cudaEventSynchronize (stop);

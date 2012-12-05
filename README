@@ -1,6 +1,6 @@
 IMPLEMENTATION
 1.mario
-TODO1: 1)Cut the input into smaller chunks of which each can be fitted into the global memory.
+1)Cut the input into smaller chunks of which each can be fitted into the global memory. (Done)
 
 OPTIMIZATION
 1.mario
