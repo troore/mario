@@ -278,17 +278,19 @@ void md5_cpu_v2(const uint *in, uint &a, uint &b, uint &c, uint &d)
 	((uint *)paddedWord)[14] = len * 8;
 }*/
 
-double cpu_execute_kernel (char *cpuWords, uint *cpuHashes, uint hashSize, uint maxWordLen)
+double cpu_execute_kernel (char *cpuWords, uint *cpuHashes, uint hashSize, unsigned char *wordsLen)
 {
 	cudaEvent_t start, stop;
 	cudaEventCreate (&start), cudaEventCreate (&stop);
 	cudaEventRecord (start, 0);
 
 	uint *iPaddedWord = new uint[16];
+	uint local_len_sum = 0;
 	for (uint i = 0; i < hashSize; i++)
 	{
-		md5_pad ((char *)iPaddedWord, &cpuWords[maxWordLen * i], maxWordLen);
+		md5_pad ((char *)iPaddedWord, &cpuWords[local_len_sum], wordsLen[i]);
 		MD5_CPU(iPaddedWord, cpuHashes[4 * i], cpuHashes[4 * i + 1], cpuHashes[4 * i + 2], cpuHashes[4 * i + 3]);
+		local_len_sum += wordsLen[i];
 	}
 	delete[] iPaddedWord;
 

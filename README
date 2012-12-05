@@ -1,10 +1,2 @@
-IMPLEMENTATION
-1.mario
-1)Cut the input into smaller chunks of which each can be fitted into the global memory. (Done)
-
-OPTIMIZATION
-1.mario
-1)Auto tune the proper grid and thread-block scale. (Wei Xuechao)
-2)Coalesce memory read/write when loading words from global memory to shared memory and storing hash values back to global memory after md5 processing. (Jiang Xia)
-3)Put the 'k' and 'r' constant arrays into constant caches. (Done)
-4)Overlap of memory copy and kernel execution between input chunks. (Wei Xuechao)
+Oops! Memory bugs encounterd!
+To be continued...

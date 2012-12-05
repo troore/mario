@@ -310,14 +310,17 @@ __host__ __device__ void md5_pad(char *paddedWord, char *gpuWord, uint len)
 // The kernel (this is the entrypoint of GPU code)
 // Loads the 8-byte word to be hashed from global to shared memory
 // and calls the calculation routine
-__global__ void md5_calc(char *gpuWords, uint *gpuHashes, int realthreads, uint maxWordLen)
+__global__ void md5_calc(char *gpuWords, uint *gpuHashes, int realthreads, unsigned char *wordsLen)
 {
 	uint idx = blockIdx.y * gridDim.x * blockDim.x + blockIdx.x * blockDim.x + threadIdx.x; // assuming blockDim.y = 1 and threadIdx.y = 0, always
 	if (idx >= realthreads) { return; }
 
 	// load the dictionary word for this thread
 	uint *iPaddedWord = &memory[0] + threadIdx.x * 16;
-	md5_pad ((char *)iPaddedWord, &gpuWords[maxWordLen * idx], maxWordLen);
+	uint pos = 0;
+	for (uint i = 0; i < idx; i++) // Use time exchange with space, or else element in wordsLen were offset.
+		pos += wordsLen[i];
+	md5_pad ((char *)iPaddedWord, &gpuWords[pos], wordsLen[idx]);
 
 	// compute MD5 hash
 	uint a, b, c, d;
@@ -332,7 +335,7 @@ __global__ void md5_calc(char *gpuWords, uint *gpuHashes, int realthreads, uint 
 }
 
 // A helper to export the kernel call to C++ code not compiled with nvcc
-double gpu_execute_kernel(int blocks_x, int blocks_y, int threads_per_block, int shared_mem_required, int realthreads, char *gpuWords, uint *gpuHashes, uint max_word_len)
+double gpu_execute_kernel(int blocks_x, int blocks_y, int threads_per_block, int shared_mem_required, int realthreads, char *gpuWords, uint *gpuHashes, unsigned char *wordsLen)
 {
 	dim3 grid;
 	grid.x = blocks_x; grid.y = blocks_y, grid.z = 1;
@@ -341,7 +344,7 @@ double gpu_execute_kernel(int blocks_x, int blocks_y, int threads_per_block, int
 	cudaEventCreate (&start), cudaEventCreate (&stop);
 	cudaEventRecord (start, 0);
 
-	md5_calc<<<grid, threads_per_block, shared_mem_required>>>(gpuWords, gpuHashes, realthreads, max_word_len);
+	md5_calc<<<grid, threads_per_block, shared_mem_required>>>(gpuWords, gpuHashes, realthreads, wordsLen);
 
 	cudaEventRecord (stop, 0);
 	cudaEventSynchronize (stop);
