@@ -1,10 +1,8 @@
-IMPLEMENTATION
-1.mario
-TODO1: 1)Cut the input into smaller chunks of which each can be fitted into the global memory.
+Bugs
 
-OPTIMIZATION
-1.mario
-1)Auto tune the proper grid and thread-block scale. (Wei Xuechao)
-2)Coalesce memory read/write when loading words from global memory to shared memory and storing hash values back to global memory after md5 processing. (Jiang Xia)
-3)Put the 'k' and 'r' constant arrays into constant caches. (Done)
-4)Overlap of memory copy and kernel execution between input chunks. (Wei Xuechao)
+B1.This version of algorithm was designed to firstly allocate 64 bytes (assuming the max length of each single message cannot exceed 448 bits) memory for each original message, then CPU does the padding word for each message. GPU mainly implements the multi-round hash process. We need to transfer 64+16=80 bytes data to GPU. However, when CPU padded the 67108864th message, there seems some integer overflow error since 67108864*4*16=2^32. The program didn't crash, but the CPU results for the 67108864th and its sequential messages are wrong.
+
+I haven't found the error, just doubting that it is due to some integer for an address out of correct (not illegal!) boundries, and the 64 bytes vector for the original messages is mostly suspected. However, I ran it on a 64-bit platform, and the poiter occupies 64 bits which shouldn't incur the error mentioned above.
+
+Considering this bug and limited global memory on GPU, I decide to implement the following versions by just allocating its needed bytes for each original message, and defering the padding process to GPU kernel (For CPU version, there is a single small 64 bytes buffer for each message, avoiding a giant 64-byte vector).
+I am still exploring...
