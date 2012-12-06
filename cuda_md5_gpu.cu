@@ -3,6 +3,7 @@
 #define RSA_KERNEL md5_v2
 
 #include <stdio.h>
+#include "cuda_md5.h"
 
 typedef unsigned int uint;
 
@@ -10,7 +11,6 @@ typedef unsigned int uint;
 // On-device variable declarations
 //
 
-extern __shared__ uint memory[];	// on-chip shared memory
 __constant__ uint k[64], rconst[16];	// constants (in fast on-chip constant cache)
 __constant__ uint target[4];		// target hash, if searching for hash matches
 
@@ -67,7 +67,8 @@ __device__ inline uint r(const uint i)
 
 __device__ inline uint &getw(uint *w, const int i)
 {
-	return w[(i+threadIdx.x) % 16];
+//	return w[(i+threadIdx.x) % 16];
+	return w[i];
 }
 
 __device__ inline uint getw(const uint *w, const int i)	// const- version
@@ -310,17 +311,30 @@ __host__ __device__ void md5_pad(char *paddedWord, char *gpuWord, uint len)
 // The kernel (this is the entrypoint of GPU code)
 // Loads the 8-byte word to be hashed from global to shared memory
 // and calls the calculation routine
-__global__ void md5_calc(char *gpuWords, uint *gpuHashes, int realthreads, uint maxWordLen)
+__global__ void md5_calc(char *gpuWords, uint *gpuHashes, int activeThreads)
 {
-	uint idx = blockIdx.y * gridDim.x * blockDim.x + blockIdx.x * blockDim.x + threadIdx.x; // assuming blockDim.y = 1 and threadIdx.y = 0, always
-	if (idx >= realthreads) { return; }
+	uint idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx >= activeThreads) { return; }
+
+	__shared__ uint memory[17 * THREADS_PER_BLOCK];
+	__shared__ char ibuf[MAX_MSG_LEN * THREADS_PER_BLOCK];
+	__shared__ uint obuf[4 * THREADS_PER_BLOCK];
+
+	uint chIdx = MAX_MSG_LEN * blockIdx.x * blockDim.x + threadIdx.x;
+	for (uint i = 0; i < MAX_MSG_LEN; i++)
+	{
+		ibuf[threadIdx.x + i * THREADS_PER_BLOCK] = gpuWords[chIdx + i * THREADS_PER_BLOCK];
+	}
+
+	__syncthreads (); 
 
 	// load the dictionary word for this thread
-	uint *iPaddedWord = &memory[0] + threadIdx.x * 16;
-	md5_pad ((char *)iPaddedWord, &gpuWords[maxWordLen * idx], maxWordLen);
+	uint *iPaddedWord = &memory[0] + threadIdx.x * 17;
+//	md5_pad ((char *)iPaddedWord, &gpuWords[MAX_MSG_LEN * idx], MAX_MSG_LEN);
+	md5_pad ((char *)iPaddedWord, &ibuf[threadIdx.x * MAX_MSG_LEN], MAX_MSG_LEN);
 
 	// compute MD5 hash
-	uint a, b, c, d;
+/*	uint a, b, c, d;
 
 	RSA_KERNEL(iPaddedWord, a, b, c, d);
 
@@ -328,20 +342,33 @@ __global__ void md5_calc(char *gpuWords, uint *gpuHashes, int realthreads, uint 
 	gpuHashes[4 * idx + 0] = a;
 	gpuHashes[4 * idx + 1] = b;
 	gpuHashes[4 * idx + 2] = c;
-	gpuHashes[4 * idx + 3] = d;
+	gpuHashes[4 * idx + 3] = d; */
+
+	RSA_KERNEL(iPaddedWord, obuf[4 * threadIdx.x], obuf[4 * threadIdx.x + 1], obuf[4 * threadIdx.x + 2], obuf[4 * threadIdx.x + 3]);
+
+	__syncthreads (); 
+
+	uint iIdx = 4 * blockIdx.x * blockDim.x + threadIdx.x;
+
+	gpuHashes[iIdx + 0 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 0 * THREADS_PER_BLOCK];
+	gpuHashes[iIdx + 1 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 1 * THREADS_PER_BLOCK];
+	gpuHashes[iIdx + 2 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 2 * THREADS_PER_BLOCK];
+	gpuHashes[iIdx + 3 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 3 * THREADS_PER_BLOCK];
 }
 
 // A helper to export the kernel call to C++ code not compiled with nvcc
-double gpu_execute_kernel(int blocks_x, int blocks_y, int threads_per_block, int shared_mem_required, int realthreads, char *gpuWords, uint *gpuHashes, uint max_word_len)
+double gpu_execute_kernel(char *gpuWords, uint *gpuHashes, int activeThreads)
 {
-	dim3 grid;
-	grid.x = blocks_x; grid.y = blocks_y, grid.z = 1;
+	dim3 grid, block;
+
+	block.x = THREADS_PER_BLOCK, block.y = 1, block.z = 1;
+	grid.x = (activeThreads + THREADS_PER_BLOCK -1) / THREADS_PER_BLOCK, grid.y = 1, grid.z = 1;
 
 	cudaEvent_t start, stop;
 	cudaEventCreate (&start), cudaEventCreate (&stop);
 	cudaEventRecord (start, 0);
 
-	md5_calc<<<grid, threads_per_block, shared_mem_required>>>(gpuWords, gpuHashes, realthreads, max_word_len);
+	md5_calc<<<grid, block>>>(gpuWords, gpuHashes, activeThreads);
 
 	cudaEventRecord (stop, 0);
 	cudaEventSynchronize (stop);

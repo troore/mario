@@ -1,10 +1,13 @@
+This version is customized to fixed length messages which cannot exceed 56 bytes.
+
 IMPLEMENTATION
 1.mario
-1)Cut the input into smaller chunks of which each can be fitted into the global memory. (Done)
+1)Cut the input into smaller chunks of which each can be fitted into the global memory. (Wei Xuechao) (Done)
 
 OPTIMIZATION
 1.mario
-1)Auto tune the proper grid and thread-block scale. (Wei Xuechao)
-2)Coalesce memory read/write when loading words from global memory to shared memory and storing hash values back to global memory after md5 processing. (Jiang Xia)
-3)Put the 'k' and 'r' constant arrays into constant caches. (Done)
-4)Overlap of memory copy and kernel execution between input chunks. (Wei Xuechao)
+1)Auto tune the proper grid and thread-block scale. (Wei Xuechao) (Cancelled, shared memory cannot be allocated dynamically or dedicated by variable, thereby the dimensions of thread-block which are used to determine neede shared memory size can only sort to macros.)
+2)Coalesce memory read/write when loading words from global memory to shared memory and storing hash values back to global memory after md5 processing. (Jiang Xia) (Done)
+3)Put the 'k' and 'r' constant arrays into constant caches. (Done) (Cancelled, Rivest didn't use the constant array 'k' and 'r' like wiki algorithm.)
+4)Overlap of memory copy and kernel execution between input chunks. (Wei Xuechao) (Cancelled, currently only kernel time is counted.)
+5)Bank confict. (Jiang Xia) (Done)
