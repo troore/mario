@@ -9,14 +9,27 @@
 
 typedef unsigned int uint;
 
+//
+// structures to store hash values
+//
+union md5hash
+{
+	uint ui[4];
+	char ch[16];
+};
+
+union md5hash_v2
+{
+	uint ui[5];
+	char ch[20];
+};
+
 void print_md5(uint *hash, bool crlf = true);
-void md5_prep(char *c0);
-double gpu_execute_kernel(char *gpuWords, uint *gpuHashes, int activeThreads);
+double gpu_execute_kernel(char *gpuWords, uint *gpuHashes, int activeThreads, int level);
 double cpu_execute_kernel (char *cpuWords, uint *cpuHashes, uint hashSize);
-void init_constants();
-void md5_cpu(uint w[16], uint &a, uint &b, uint &c, uint &d);
-void md5_cpu_v2(const uint *in, uint &a, uint &b, uint &c, uint &d);
+void md5_cpu(const uint *in, uint &a, uint &b, uint &c, uint &d);
 __host__ __device__ void md5_pad(char *paddedWord, char *gpuWord, uint len);
+void setup_md5_funcs ();
 
 
 #endif

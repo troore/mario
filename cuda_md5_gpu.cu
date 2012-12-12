@@ -1,144 +1,20 @@
 // CUDA MD5 hash calculation implementation.
 
-#define RSA_KERNEL md5_v2
-
 #include <stdio.h>
 #include "cuda_md5.h"
 
 typedef unsigned int uint;
 
-//
-// On-device variable declarations
-//
-
-__constant__ uint k[64], rconst[16];	// constants (in fast on-chip constant cache)
-__constant__ uint target[4];		// target hash, if searching for hash matches
-
-//
-// MD5 magic numbers. These will be loaded into on-device "constant" memory
-//
-static const uint k_cpu[64] =
-{
-	0xd76aa478, 	0xe8c7b756,	0x242070db,	0xc1bdceee,
-	0xf57c0faf,	0x4787c62a, 	0xa8304613,	0xfd469501,
-	0x698098d8,	0x8b44f7af,	0xffff5bb1,	0x895cd7be,
-	0x6b901122, 	0xfd987193, 	0xa679438e,	0x49b40821,
-
-	0xf61e2562,	0xc040b340, 	0x265e5a51, 	0xe9b6c7aa,
-	0xd62f105d,	0x2441453,	0xd8a1e681,	0xe7d3fbc8,
-	0x21e1cde6,	0xc33707d6, 	0xf4d50d87, 	0x455a14ed,
-	0xa9e3e905,	0xfcefa3f8, 	0x676f02d9, 	0x8d2a4c8a,
-
-	0xfffa3942,	0x8771f681, 	0x6d9d6122, 	0xfde5380c,
-	0xa4beea44, 	0x4bdecfa9, 	0xf6bb4b60, 	0xbebfbc70,
-	0x289b7ec6, 	0xeaa127fa, 	0xd4ef3085,	0x4881d05,
-	0xd9d4d039, 	0xe6db99e5, 	0x1fa27cf8, 	0xc4ac5665,
-
-	0xf4292244, 	0x432aff97, 	0xab9423a7, 	0xfc93a039,
-	0x655b59c3, 	0x8f0ccc92, 	0xffeff47d, 	0x85845dd1,
-	0x6fa87e4f, 	0xfe2ce6e0, 	0xa3014314, 	0x4e0811a1,
-	0xf7537e82, 	0xbd3af235, 	0x2ad7d2bb, 	0xeb86d391,
-};
-
-static const uint rconst_cpu[16] =
-{
-	7, 12, 17, 22,   5,  9, 14, 20,   4, 11, 16, 23,   6, 10, 15, 21
-};
-
-void init_constants()
-{
-	cudaMemcpyToSymbol(k, k_cpu, sizeof(k));
-	cudaMemcpyToSymbol(rconst, rconst_cpu, sizeof(rconst));
-}
-
-//
-// MD5 routines (straight from Wikipedia's MD5 pseudocode description)
-//
-
-__device__ inline uint leftrotate (uint x, uint c)
-{
-	return (x << c) | (x >> (32-c));
-}
-
-__device__ inline uint r(const uint i)
-{
-	return rconst[(i / 16) * 4 + i % 4];
-}
-
 __device__ inline uint &getw(uint *w, const int i)
 {
-//	return w[(i+threadIdx.x) % 16];
 	return w[i];
 }
 
 __device__ inline uint getw(const uint *w, const int i)	// const- version
 {
-//	return w[(i+threadIdx.x) % 16];
 	return w[i];
 }
 
-
-__device__ inline uint getk(const int i)
-{
-	return k[i];	// Note: this is as fast as possible (measured)
-}
-
-__device__ void step(const uint i, const uint f, const uint g, uint &a, uint &b, uint &c, uint &d, const uint *w)
-{
-	uint temp = d;
-	d = c;
-	c = b;
-	b = b + leftrotate((a + f + getk(i) + getw(w, g)), r(i));
-	a = temp;
-}
-
-__device__ void inline md5(const uint *w, uint &a, uint &b, uint &c, uint &d)
-{
-	const uint a0 = 0x67452301;
-	const uint b0 = 0xEFCDAB89;
-	const uint c0 = 0x98BADCFE;
-	const uint d0 = 0x10325476;
-
-	//Initialize hash value for this chunk:
-	a = a0;
-	b = b0;
-	c = c0;
-	d = d0;
-
-	uint f, g, i = 0;
-	for(; i != 16; i++)
-	{
-		f = (b & c) | ((~b) & d);
-		g = i;
-		step(i, f, g, a, b, c, d, w);
-	}
-
-	for(; i != 32; i++)
-	{
-		f = (d & b) | ((~d) & c);
-		g = (5*i + 1) % 16;
-		step(i, f, g, a, b, c, d, w);
-	}
-
-	for(; i != 48; i++)
-	{
-		f = b ^ c ^ d;
-		g = (3*i + 5) % 16;
-		step(i, f, g, a, b, c, d, w);
-	}
-
-	for(; i != 64; i++)
-	{
-		f = c ^ (b | (~d));
-		g = (7*i) % 16;
-		step(i, f, g, a, b, c, d, w);
-	}
-
-	a += a0;
-	b += b0;
-	c += c0;
-	d += d0;
-}
 
 //////////////////////////////////////////////////////////////////////////////
 /////////////       Ron Rivest's MD5 C Implementation       //////////////////
@@ -180,7 +56,7 @@ __device__ void inline md5(const uint *w, uint &a, uint &b, uint &c, uint &d)
 
 /* Basic MD5 step. Transform buf based on in.
  */
-void inline __device__ md5_v2(const uint *in, uint &a, uint &b, uint &c, uint &d)
+void inline __device__ md5_cuda(const uint *in, uint &a, uint &b, uint &c, uint &d)
 {
 	const uint a0 = 0x67452301;
 	const uint b0 = 0xEFCDAB89;
@@ -311,14 +187,60 @@ __host__ __device__ void md5_pad(char *paddedWord, char *gpuWord, uint len)
 // The kernel (this is the entrypoint of GPU code)
 // Loads the 8-byte word to be hashed from global to shared memory
 // and calls the calculation routine
-__global__ void md5_calc(char *gpuWords, uint *gpuHashes, int activeThreads)
+__global__ void md5_calc_l0(char *gpuWords, uint *gpuHashes, int activeThreads)
 {
 	uint idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= activeThreads) { return; }
 
-	__shared__ uint memory[17 * THREADS_PER_BLOCK];
-	__shared__ char ibuf[MAX_MSG_LEN * THREADS_PER_BLOCK];
-	__shared__ uint obuf[4 * THREADS_PER_BLOCK];
+	__shared__ uint memory[THREADS_PER_BLOCK * 16];
+
+	// load the dictionary word for this thread
+	uint *iPaddedWord = &memory[0] + threadIdx.x * 16;
+	md5_pad ((char *)iPaddedWord, &gpuWords[MAX_MSG_LEN * idx], MAX_MSG_LEN);
+
+	// compute MD5 hash
+	uint a, b, c, d;
+
+	md5_cuda (iPaddedWord, a, b, c, d);
+
+	// return the hash
+	gpuHashes[4 * idx + 0] = a;
+	gpuHashes[4 * idx + 1] = b;
+	gpuHashes[4 * idx + 2] = c;
+	gpuHashes[4 * idx + 3] = d; 
+}
+
+__global__ void md5_calc_l1(char *gpuWords, uint *gpuHashes, int activeThreads)
+{
+	uint idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx >= activeThreads) { return; }
+
+	__shared__ uint memory[THREADS_PER_BLOCK * 17];
+
+	// load the dictionary word for this thread
+	uint *iPaddedWord = &memory[0] + threadIdx.x * 17;
+	md5_pad ((char *)iPaddedWord, &gpuWords[MAX_MSG_LEN * idx], MAX_MSG_LEN);
+
+	// compute MD5 hash
+	uint a, b, c, d;
+
+	md5_cuda (iPaddedWord, a, b, c, d);
+
+	// return the hash
+	gpuHashes[4 * idx + 0] = a;
+	gpuHashes[4 * idx + 1] = b;
+	gpuHashes[4 * idx + 2] = c;
+	gpuHashes[4 * idx + 3] = d; 
+}
+
+__global__ void md5_calc_l2(char *gpuWords, uint *gpuHashes, int activeThreads)
+{
+	uint idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx >= activeThreads) { return; }
+
+	__shared__ uint memory[THREADS_PER_BLOCK * 17];
+	__shared__ char ibuf[THREADS_PER_BLOCK * MAX_MSG_LEN];
+	__shared__ uint obuf[THREADS_PER_BLOCK * 4];
 
 	uint chIdx = MAX_MSG_LEN * blockIdx.x * blockDim.x + threadIdx.x;
 	for (uint i = 0; i < MAX_MSG_LEN; i++)
@@ -330,21 +252,11 @@ __global__ void md5_calc(char *gpuWords, uint *gpuHashes, int activeThreads)
 
 	// load the dictionary word for this thread
 	uint *iPaddedWord = &memory[0] + threadIdx.x * 17;
-//	md5_pad ((char *)iPaddedWord, &gpuWords[MAX_MSG_LEN * idx], MAX_MSG_LEN);
 	md5_pad ((char *)iPaddedWord, &ibuf[threadIdx.x * MAX_MSG_LEN], MAX_MSG_LEN);
 
 	// compute MD5 hash
-/*	uint a, b, c, d;
 
-	RSA_KERNEL(iPaddedWord, a, b, c, d);
-
-	// return the hash
-	gpuHashes[4 * idx + 0] = a;
-	gpuHashes[4 * idx + 1] = b;
-	gpuHashes[4 * idx + 2] = c;
-	gpuHashes[4 * idx + 3] = d; */
-
-	RSA_KERNEL(iPaddedWord, obuf[4 * threadIdx.x], obuf[4 * threadIdx.x + 1], obuf[4 * threadIdx.x + 2], obuf[4 * threadIdx.x + 3]);
+	md5_cuda (iPaddedWord, obuf[4 * threadIdx.x], obuf[4 * threadIdx.x + 1], obuf[4 * threadIdx.x + 2], obuf[4 * threadIdx.x + 3]);
 
 	__syncthreads (); 
 
@@ -353,11 +265,95 @@ __global__ void md5_calc(char *gpuWords, uint *gpuHashes, int activeThreads)
 	gpuHashes[iIdx + 0 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 0 * THREADS_PER_BLOCK];
 	gpuHashes[iIdx + 1 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 1 * THREADS_PER_BLOCK];
 	gpuHashes[iIdx + 2 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 2 * THREADS_PER_BLOCK];
-	gpuHashes[iIdx + 3 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 3 * THREADS_PER_BLOCK];
+	gpuHashes[iIdx + 3 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 3 * THREADS_PER_BLOCK]; 
 }
 
+__global__ void md5_calc_l3(char *gpuWords, uint *gpuHashes, int activeThreads)
+{
+	uint idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx >= activeThreads) { return; }
+
+	__shared__ uint memory[THREADS_PER_BLOCK * 17];
+	__shared__ char ibuf[THREADS_PER_BLOCK * (MAX_MSG_LEN + 1)];
+	__shared__ uint obuf[THREADS_PER_BLOCK * (4 + 1)];
+
+	uint chIdx = (MAX_MSG_LEN + 1) * blockIdx.x * blockDim.x + threadIdx.x;
+	for (uint i = 0; i < MAX_MSG_LEN + 1; i++)
+	{
+		ibuf[threadIdx.x + i * THREADS_PER_BLOCK] = gpuWords[chIdx + i * THREADS_PER_BLOCK];
+	}
+
+	__syncthreads (); 
+
+	// load the dictionary word for this thread
+	uint *iPaddedWord = &memory[0] + threadIdx.x * 17;
+	md5_pad ((char *)iPaddedWord, &ibuf[threadIdx.x * (MAX_MSG_LEN + 1)], MAX_MSG_LEN);
+
+	// compute MD5 hash
+
+	md5_cuda (iPaddedWord, obuf[5 * threadIdx.x], obuf[5 * threadIdx.x + 1], obuf[5 * threadIdx.x + 2], obuf[5 * threadIdx.x + 3]);
+
+	__syncthreads (); 
+
+	uint iIdx = 5 * blockIdx.x * blockDim.x + threadIdx.x;
+
+	gpuHashes[iIdx + 0 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 0 * THREADS_PER_BLOCK];
+	gpuHashes[iIdx + 1 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 1 * THREADS_PER_BLOCK];
+	gpuHashes[iIdx + 2 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 2 * THREADS_PER_BLOCK];
+	gpuHashes[iIdx + 3 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 3 * THREADS_PER_BLOCK];
+	gpuHashes[iIdx + 4 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 4 * THREADS_PER_BLOCK];
+}
+
+__global__ void md5_calc_l4(char *gpuWords, uint *gpuHashes, int activeThreads)
+{
+	uint idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx >= activeThreads) { return; }
+
+	__shared__ uint memory[THREADS_PER_BLOCK * 17];
+	__shared__ char ibuf[THREADS_PER_BLOCK * (MAX_MSG_LEN + 4)];
+	__shared__ uint obuf[THREADS_PER_BLOCK * (4 + 1)];
+
+	uint chIdx = ((MAX_MSG_LEN + 4) / 4) * blockIdx.x * blockDim.x + threadIdx.x;
+	for (uint i = 0; i < (MAX_MSG_LEN + 4) / 4; i++)
+	{
+		((uint *)ibuf)[threadIdx.x + i * THREADS_PER_BLOCK] = ((uint *)gpuWords)[chIdx + i * THREADS_PER_BLOCK];
+	}
+
+	__syncthreads (); 
+
+	// load the dictionary word for this thread
+	uint *iPaddedWord = &memory[0] + threadIdx.x * 17;
+	md5_pad ((char *)iPaddedWord, &ibuf[threadIdx.x * (MAX_MSG_LEN + 4)], MAX_MSG_LEN);
+
+	// compute MD5 hash
+
+	md5_cuda (iPaddedWord, obuf[5 * threadIdx.x], obuf[5 * threadIdx.x + 1], obuf[5 * threadIdx.x + 2], obuf[5 * threadIdx.x + 3]);
+
+	__syncthreads (); 
+
+	uint iIdx = 5 * blockIdx.x * blockDim.x + threadIdx.x;
+
+	gpuHashes[iIdx + 0 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 0 * THREADS_PER_BLOCK];
+	gpuHashes[iIdx + 1 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 1 * THREADS_PER_BLOCK];
+	gpuHashes[iIdx + 2 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 2 * THREADS_PER_BLOCK];
+	gpuHashes[iIdx + 3 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 3 * THREADS_PER_BLOCK];
+	gpuHashes[iIdx + 4 * THREADS_PER_BLOCK] = obuf[threadIdx.x + 4 * THREADS_PER_BLOCK];
+}
+
+void (*md5_funcs[5]) (char *gpuWords, uint *gpuHashes, int activeThreads);
+
+void setup_md5_funcs ()
+{
+	md5_funcs[0] = md5_calc_l0;
+	md5_funcs[1] = md5_calc_l1;
+	md5_funcs[2] = md5_calc_l2;
+	md5_funcs[3] = md5_calc_l3;
+	md5_funcs[4] = md5_calc_l4;
+}
+
+
 // A helper to export the kernel call to C++ code not compiled with nvcc
-double gpu_execute_kernel(char *gpuWords, uint *gpuHashes, int activeThreads)
+double gpu_execute_kernel(char *gpuWords, uint *gpuHashes, int activeThreads, int level)
 {
 	dim3 grid, block;
 
@@ -368,7 +364,7 @@ double gpu_execute_kernel(char *gpuWords, uint *gpuHashes, int activeThreads)
 	cudaEventCreate (&start), cudaEventCreate (&stop);
 	cudaEventRecord (start, 0);
 
-	md5_calc<<<grid, block>>>(gpuWords, gpuHashes, activeThreads);
+	md5_funcs[level]<<<grid, block>>>(gpuWords, gpuHashes, activeThreads);
 
 	cudaEventRecord (stop, 0);
 	cudaEventSynchronize (stop);
